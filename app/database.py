@@ -1,14 +1,15 @@
-from math import exp
-from sqlalchemy import create_engine, Engine, event
-from sqlalchemy.orm import sessionmaker, Session, declarative_base
-from sqlalchemy.pool import QueuePool
 from typing import Generator
+
+from sqlalchemy import Engine, create_engine
+from sqlalchemy.orm import Session, declarative_base, sessionmaker
+from sqlalchemy.pool import QueuePool
 
 from app.config import settings
 from app.exceptions import DatabaseError
 from app.logging_config import logger
 
 Base = declarative_base()
+
 
 def get_engine() -> Engine:
     """
@@ -33,6 +34,7 @@ def get_engine() -> Engine:
         logger.error(f"Failed to create database engine: {e}")
         raise DatabaseError(f"Failed to create database engine: {e}")
 
+
 # Create engine
 engine = get_engine()
 
@@ -42,6 +44,7 @@ SessionLocal = sessionmaker(
     bind=engine,
     expire_on_commit=False,
 )
+
 
 def get_db() -> Generator[Session, None, None]:
     """
@@ -63,6 +66,7 @@ def get_db() -> Generator[Session, None, None]:
     finally:
         db.close()
 
+
 def init_db() -> None:
     """
     Initialize database by creating all tables.
@@ -77,6 +81,7 @@ def init_db() -> None:
         logger.error(f"Failed to initialize database: {e}")
         raise DatabaseError(f"Failed to initialize database: {e}")
 
+
 def drop_all_tables() -> None:
     """
     Drop all tables from the database (for testing).
@@ -90,6 +95,7 @@ def drop_all_tables() -> None:
     except Exception as e:
         logger.error(f"Failed to drop database tables: {e}")
         raise DatabaseError(f"Failed to drop tables: {str(e)}")
+
 
 __all__ = [
     "get_engine",

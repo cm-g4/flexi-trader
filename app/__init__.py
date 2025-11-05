@@ -1,9 +1,9 @@
 """Telegram Trading Signal Bot - Main application package."""
 
-from app.config import settings, get_settings
-from app.logging_config import logger, setup_logging
+from app.config import get_settings, settings
+from app.database import Base, SessionLocal, engine, get_db, init_db
 from app.exceptions import FlexiTraderException
-from app.database import Base, engine, SessionLocal, get_db, init_db
+from app.logging_config import logger, setup_logging
 
 __version__ = "0.1.0"
 __author__ = "Gigman2"

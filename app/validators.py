@@ -1,14 +1,14 @@
 """Validation utilities for data validation."""
 
 import re
-from typing import Any
 from decimal import Decimal
+from typing import Any
 
 from app.exceptions import ValidationError
 
-class Validators:
-    """Validation utilities for common data types and business rules."""
 
+class Validator:
+    """Validation utilities for common data types and business rules."""
 
     @staticmethod
     def validate_symbol(symbol: str) -> str:
@@ -25,18 +25,26 @@ class Validators:
             ValidationError: If symbol format is invalid
         """
         if not symbol or not isinstance(symbol, str):
-            raise ValidationError("Symbol must be a non-empty string", field="symbol")
-        
-        symbol = symbol.upper().strip()
-
-
-        # Allow  alphanumeric characters and slashes
-        if not re.match(r"^[A-Z0-9/]{3,10}$", symbol):
             raise ValidationError(
-                f"Invalid symbol format: {symbol}. Must be 3-10 alphanumeric characters or contain slashes.",
-                field="symbol"
+                "Symbol must be a non-empty string",
+                field="symbol",
             )
 
+        symbol = symbol.upper().strip()
+
+        # Allow alphanumeric and slashes (e.g., EUR/USD)
+        if not re.match(r"^[A-Z0-9/]{3,10}$", symbol):
+            raise ValidationError(
+                f"Invalid symbol format: {symbol}. Must be 3-10 alphanumeric "
+                "characters or contain slashes.",
+                field="symbol",
+            )
+
+        if symbol.replace("/", "").isdigit():
+            raise ValidationError(
+                f"Invalid symbol format: {symbol}. Must contain letters.",
+                field="symbol",
+            )
         return symbol
 
     @staticmethod
@@ -54,91 +62,34 @@ class Validators:
         Raises:
             ValidationError: If price is invalid
         """
-        try:
-            price_decimal = Decimal(str(price))
-            
-            if price_decimal <= 0:
-                raise ValidationError(
-                    f"Price must be position but got : {price}",
-                    field=field_name
-                )
-
-            if price_decimal.as_tuple().exponent < -10:
-                raise ValidationError(
-                    f"{field_name} has too many decimal places",
-                    field=field_name
-                )
-
-            return price_decimal
-
-        except (ValueError, TypeError):
+        if price is None or price == "":
             raise ValidationError(
-                f"{field_name} must be a valid number, got {price}",
-                field=field_name
+                f"{field_name} cannot be None or empty", field=field_name
             )
-
-    def validate_signal_type(signal_type: str) -> str:
-        """
-        Validate signal type.
-
-        Args:
-            signal_type: Signal type (BUY, SELL, LONG, SHORT)
-
-        Returns:
-            Normalized signal type (uppercase)
-
-        Raises:
-            ValidationError: If signal type is invalid
-        """
-        valid_types = ["BUY", "SELL", "LONG", "SHORT"]
-        signal_type = signal_type.upper().strip()
-
-        if signal_type not in valid_types:
-            raise ValidationError(
-                f"Invalid signal type: {signal_type}. Must be one of: {valid_types}",
-                field="signal_type"
-            )
-
-        return signal_type
-
-
-    def validate_price(price: int, field_name: str = "price") -> Decimal:
-        """
-        Validate price value.
-
-        Args:
-            price: Price value (int, float, or str)
-            field_name: Name of the field for error message
-
-        Returns:
-            Decimal price value
-
-        Raises:
-            ValidationError: If price is invalid
-        """
         try:
             price_decimal = Decimal(str(price))
 
             if price_decimal <= 0:
                 raise ValidationError(
                     f"{field_name} must be positive, got {price}",
-                    field=field_name
+                    field=field_name,
                 )
 
             # Check for reasonable precision (max 10 decimal places)
-            if price_decimal.as_tuple().exponent < -10:
+            if int(price_decimal.as_tuple().exponent) < -10:
                 raise ValidationError(
                     f"{field_name} has too many decimal places",
-                    field=field_name
+                    field=field_name,
                 )
 
             return price_decimal
-        except (ValueError, TypeError):
+        except ValidationError:
+            raise
+        except Exception:
             raise ValidationError(
                 f"{field_name} must be a valid number, got {price}",
-                field=field_name
+                field=field_name,
             )
-
 
     @staticmethod
     def validate_signal_type(signal_type: str) -> str:
@@ -159,8 +110,9 @@ class Validators:
 
         if signal_type not in valid_types:
             raise ValidationError(
-                f"Invalid signal type: {signal_type}. Must be one of {valid_types}",
-                field="signal_type"
+                f"Invalid signal type: {signal_type}."
+                "Must be one of {valid_types}",
+                field="signal_type",
             )
 
         return signal_type
@@ -184,14 +136,17 @@ class Validators:
 
         if timeframe not in valid_timeframes:
             raise ValidationError(
-                f"Invalid timeframe: {timeframe}. Must be one of {valid_timeframes}",
-                field="timeframe"
+                f"Invalid timeframe: {timeframe}."
+                "Must be one of {valid_timeframes}",
+                field="timeframe",
             )
 
         return timeframe
 
     @staticmethod
-    def validate_buy_signal(entry: Decimal, stop_loss: Decimal, take_profit: Decimal) -> bool:
+    def validate_buy_signal(
+        entry: Decimal, stop_loss: Decimal, take_profit: Decimal
+    ) -> bool:
         """
         Validate BUY signal logic: entry > SL and TPs > entry.
 
@@ -208,18 +163,22 @@ class Validators:
         """
         if entry <= stop_loss:
             raise ValidationError(
-                f"BUY signal: entry ({entry}) must be greater than stop loss ({stop_loss})"
+                f"BUY signal: entry ({entry}) must be greater than stop loss "
+                "({stop_loss})",
             )
 
         if take_profit <= entry:
             raise ValidationError(
-                f"BUY signal: take profit ({take_profit}) must be greater than entry ({entry})"
+                f"BUY signal: take profit ({take_profit}) "
+                " must be greater than entry ({entry})",
             )
 
         return True
 
     @staticmethod
-    def validate_sell_signal(entry: Decimal, stop_loss: Decimal, take_profit: Decimal) -> bool:
+    def validate_sell_signal(
+        entry: Decimal, stop_loss: Decimal, take_profit: Decimal
+    ) -> bool:
         """
         Validate SELL signal logic: entry < SL and TPs < entry.
 
@@ -236,12 +195,14 @@ class Validators:
         """
         if entry >= stop_loss:
             raise ValidationError(
-                f"SELL signal: entry ({entry}) must be less than stop loss ({stop_loss})"
+                f"SELL signal: entry ({entry}) must be less than stop loss "
+                "({stop_loss})",
             )
 
         if take_profit >= entry:
             raise ValidationError(
-                f"SELL signal: take profit ({take_profit}) must be less than entry ({entry})"
+                f"SELL signal: take profit ({take_profit}) "
+                " must be less than entry ({entry})",
             )
 
         return True
@@ -251,7 +212,7 @@ class Validators:
         entry: Decimal,
         stop_loss: Decimal,
         take_profit: Decimal,
-        signal_type: str = "BUY"
+        signal_type: str = "BUY",
     ) -> Decimal:
         """
         Calculate and validate risk/reward ratio.
@@ -282,13 +243,9 @@ class Validators:
             ratio = reward / risk
             return Decimal(str(ratio)).quantize(Decimal("0.01"))
         except Exception as e:
-            raise ValidationError(f"Failed to calculate risk/reward ratio: {str(e)}")
+            raise ValidationError(
+                f"Failed to calculate risk/reward ratio: {str(e)}",
+            )
 
 
 __all__ = ["Validator"]
-
-
-
-
-
-
