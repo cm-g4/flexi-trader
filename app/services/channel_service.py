@@ -267,7 +267,7 @@ class ChannelService:
         if provider_name:
             channel.provider_name = provider_name.strip()
 
-        channel.updated_at = datetime.now(datetime.timezone.utc)
+            channel.updated_at = datetime.now(datetime.timezone.utc)
         session.add(channel)
         session.flush()
 
