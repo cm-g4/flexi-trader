@@ -1,5 +1,10 @@
 """Database models package."""
 
-from typing import List
+from app.models.channel import Channel
+from app.models.message import Message
 
-__all__: List[str] = []
+
+__all__ = [
+    "Channel",
+    "Message",
+]
