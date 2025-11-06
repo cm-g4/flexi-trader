@@ -26,4 +26,6 @@ python-json-logger==2.0.7
 # Telegram bot
 python-telegram-bot>=20.0
 
+asyncio-contextmanager>=1.0
+
 

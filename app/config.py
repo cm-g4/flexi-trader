@@ -55,6 +55,31 @@ class Settings(BaseSettings):
         default_factory=lambda: Path(__file__).parent.parent / "logs"
     )
 
+    # Message Queue Configuration
+    message_queue_max_size: int = Field(
+        default=1000, 
+        validation_alias="MESSAGE_QUEUE_MAX_SIZE"
+    )
+    message_queue_timeout: int = Field(
+        default=30,
+        validation_alias="MESSAGE_QUEUE_TIMEOUT"
+    )
+    max_concurrent_workers: int = Field(
+        default=5,
+        validation_alias="MAX_CONCURRENT_WORKERS"
+    )
+
+    # Rate Limiting Configuration  
+    rate_limit_channel: int = Field(
+        default=30,
+        validation_alias="RATE_LIMIT_CHANNEL"
+    )
+    rate_limit_user: int = Field(
+        default=100,
+        validation_alias="RATE_LIMIT_USER"
+    )
+
+
     class Config:
         # Load .env.test during testing, .env otherwise
         if os.getenv("PYTEST_RUNNING"):
