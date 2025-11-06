@@ -1,5 +1,15 @@
 """Services package."""
 
-from typing import List
+from app.services.channel_service import ChannelService
+from app.services.duplicate_detection import DuplicateDetectionService
+from app.services.message_receiver import MessageReceiverService
 
-__all__: List[str] = []
+__all__ = [
+    "ChannelService",
+    "MessageReceiverService",
+    "DuplicateDetectionService",
+]
+
+
+
+

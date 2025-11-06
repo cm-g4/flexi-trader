@@ -66,8 +66,17 @@ class Message(Base):
     extraction_attempts = Integer(default=0, nullable=False)
 
     # Timestamps
-    created_at = DateTime(timezone=True, default=datetime.timezone.utc, nullable=False)
-    updated_at = DateTime(timezone=True, default=datetime.timezone.utc, onupdate=datetime.timezone.utc, nullable=False)
+    created_at = DateTime(
+        timezone=True,
+        default=datetime.now(datetime.timezone.utc),
+        nullable=False,
+    )
+    updated_at = DateTime(
+        timezone=True,
+        default=datetime.now(datetime.timezone.utc),
+        onupdate=datetime.now(datetime.timezone.utc),
+        nullable=False,
+    )
 
     # Additional metadata
     raw_data = JSON(nullable=True)
@@ -82,17 +91,17 @@ class Message(Base):
     def mark_as_signal(self) -> None:
         """Mark message as a valid signal."""
         self.is_signal = True
-        self.updated_at = datetime.timezone.utc
+        self.updated_at = datetime.now(datetime.timezone.utc)
 
     def mark_as_processed(self) -> None:
         """Mark message as processed."""
         self.processed = True
-        self.processed_at = datetime.timezone.utc
-        self.updated_at = datetime.timezone.utc
+        self.processed_at = datetime.now(datetime.timezone.utc)
+        self.updated_at = datetime.now(datetime.timezone.utc)
 
     def increment_extraction_attempts(self) -> None:
         """Increment extraction attempt counter."""
         self.extraction_attempts += 1
-        self.updated_at = datetime.timezone.utc
+        self.updated_at = datetime.now(datetime.timezone.utc)
 
 __all__ = ["Message"]

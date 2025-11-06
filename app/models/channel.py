@@ -46,13 +46,13 @@ class Channel(Base):
     # Timestamps
     created_at = DateTime(
         timezone=True, 
-        default=datetime.timezone.utc, 
+        default=datetime.now(datetime.timezone.utc), 
         nullable=False,
     )
     updated_at = DateTime(
         timezone=True, 
-        default=datetime.timezone.utc,
-        onupdate=datetime.timezone.utc,
+        default=datetime.now(datetime.timezone.utc),
+        onupdate=datetime.now(datetime.timezone.utc),
         nullable=False,
     )
 
