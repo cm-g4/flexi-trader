@@ -1,8 +1,11 @@
 """Channel model for Telegram channel/group storage."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
+from uuid import uuid4
 
 from app.database import Base
 
@@ -27,32 +30,33 @@ class Channel(Base):
 
     __tablename__ = "channels"
 
-    # Primary key
-    id = Column(String(36), primary_key=True)
-
-    # User relationship (to be added in Phase 2 with user management)
-    user_id = Column(String(36))
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
 
     # Channel information
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
+
+    # Telegram information
     telegram_channel_id = Column(Integer, nullable=False)
     telegram_chat_id = Column(Integer, nullable=False)
     
     # Status
     is_active = Column(Boolean, default=True)
+
+    # Provider information
     provider_name = Column(String(255), nullable=False)
 
     # Timestamps
-    created_at = Column(DateTime,
-        timezone=True, 
-        default=datetime.now(datetime.timezone.utc), 
+    created_at = Column(
+        DateTime(timezone=True),
+        default=datetime.now(timezone.utc), 
         nullable=False,
     )
-    updated_at = Column(DateTime,
-        timezone=True, 
-        default=datetime.now(datetime.timezone.utc),
-        onupdate=datetime.now(datetime.timezone.utc),
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=datetime.now(timezone.utc),
+        onupdate=datetime.now(timezone.utc),
         nullable=False,
     )
 
@@ -60,10 +64,9 @@ class Channel(Base):
     signal_count = Column(Integer, default=0)
     last_signal_at = Column(DateTime, nullable=True)
 
-    # Relationships (to be populated in future sprints)
-    # messages = relationship("Message", back_populates="channel")
-    # templates = relationship("Template", back_populates="channel")
-    # signals = relationship("Signal", back_populates="channel")
+    # Relationships
+    templates = relationship("Template", back_populates="channel", cascade="all, delete-orphan")
+    signals = relationship("Signal", back_populates="channel", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         return (

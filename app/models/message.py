@@ -1,8 +1,11 @@
 """Message model for raw Telegram message storage."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import JSON, BigInteger, Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
+from uuid import uuid4
 
 from app.database import Base
 
@@ -33,7 +36,7 @@ class Message(Base):
 
 
     # Primary key
-    id = Column(String(36), primary_key=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
 
 
     # Foreign keys
@@ -51,19 +54,19 @@ class Message(Base):
     # Processing status
     is_signal = Column(Boolean, default=False, nullable=False)
     processed = Column(Boolean, default=False, nullable=False)
-    processed_at = Column(DateTime, timezone=True, nullable=True)
+    processed_at = Column(DateTime(timezone=True), nullable=True)
     extraction_attempts = Column(Integer, default=0, nullable=False)
 
     # Timestamps
-    created_at = Column(DateTime,
-        timezone=True,
-        default=datetime.now(datetime.timezone.utc),
+    created_at = Column(
+        DateTime(timezone=True),
+        default=datetime.now(timezone.utc),
         nullable=False,
     )
-    updated_at = Column(DateTime,
-        timezone=True,
-        default=datetime.now(datetime.timezone.utc),
-        onupdate=datetime.now(datetime.timezone.utc),
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=datetime.now(timezone.utc),
+        onupdate=datetime.now(timezone.utc),
         nullable=False,
     )
 
@@ -80,18 +83,18 @@ class Message(Base):
     def mark_as_signal(self) -> None:
         """Mark message as a valid signal."""
         self.is_signal = True
-        self.updated_at = datetime.now(datetime.timezone.utc)
+        self.updated_at = datetime.now(timezone.utc)
 
     def mark_as_processed(self) -> None:
         """Mark message as processed."""
         self.processed = True
-        self.processed_at = datetime.now(datetime.timezone.utc)
-        self.updated_at = datetime.now(datetime.timezone.utc)
+        self.processed_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now(timezone.utc)
 
     def increment_extraction_attempts(self) -> None:
         """Increment extraction attempt counter."""
         self.extraction_attempts += 1
-        self.updated_at = datetime.now(datetime.timezone.utc)
+        self.updated_at = datetime.now(timezone.utc)
 
     def to_dict(self) -> dict:
         """Convert message to dictionary."""

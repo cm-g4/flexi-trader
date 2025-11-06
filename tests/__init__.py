@@ -1,3 +1,9 @@
+import os
+
+# Ensure PYTEST_RUNNING is set before imports (in case conftest.py hasn't run yet)
+if "PYTEST_RUNNING" not in os.environ:
+    os.environ["PYTEST_RUNNING"] = "true"
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker

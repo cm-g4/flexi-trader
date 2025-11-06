@@ -56,9 +56,9 @@ class Settings(BaseSettings):
     )
 
     class Config:
-        # Don't load .env during testing
+        # Load .env.test during testing, .env otherwise
         if os.getenv("PYTEST_RUNNING"):
-            env_file = None
+            env_file = ".env.test"
         else:
             env_file = ".env"
         case_sensitive = False

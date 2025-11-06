@@ -6,9 +6,12 @@ from app.config import Settings, get_settings
 class TestSettings:
     """Test Settings configuration."""
 
-    def test_default_settings(self):
+    def test_default_settings(self, monkeypatch):
         """Test settings with defaults."""
+        # Disable .env.test loading to test defaults
+        # Use _env_file=None to prevent env file loading
         settings = Settings(
+            _env_file=None,
             telegram_bot_token="test_token",
             telegram_admin_id=123456,
         )
@@ -51,14 +54,24 @@ class TestSettings:
         )
         assert settings.logs_dir.exists()
 
-    def test_database_url_default(self):
+    def test_database_url_default(self, monkeypatch):
         """Test default database URL."""
-        settings = Settings(telegram_bot_token="test", telegram_admin_id=123)
+        # Disable .env.test loading to test defaults
+        settings = Settings(
+            _env_file=None,
+            telegram_bot_token="test",
+            telegram_admin_id=123,
+        )
         assert "postgresql" in settings.database_url
 
-    def test_rate_limit_default(self):
+    def test_rate_limit_default(self, monkeypatch):
         """Test rate limit has reasonable default."""
-        settings = Settings(telegram_bot_token="test", telegram_admin_id=123)
+        # Disable .env.test loading to test defaults
+        settings = Settings(
+            _env_file=None,
+            telegram_bot_token="test",
+            telegram_admin_id=123,
+        )
         assert settings.rate_limit_enabled is True
         assert settings.rate_limit_per_minute >= 10
 
@@ -73,7 +86,11 @@ class TestSettings:
 class TestSettingsValidation:
     """Test settings validation."""
 
-    def test_missing_telegram_token_default(self):
+    def test_missing_telegram_token_default(self, monkeypatch):
         """Test missing telegram token defaults to empty string."""
-        settings = Settings(telegram_admin_id=123)
+        # Disable .env.test loading to test defaults
+        settings = Settings(
+            _env_file=None,
+            telegram_admin_id=123,
+        )
         assert settings.telegram_bot_token == ""

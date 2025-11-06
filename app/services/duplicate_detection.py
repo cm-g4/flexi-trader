@@ -1,12 +1,13 @@
 """Duplicate detection service for messages and signals."""
 
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from token import OP
 from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from app.exceptions import DuplicateSignalError
 from app.logging_config import logger
 from app.models import Message
 
@@ -40,7 +41,7 @@ class DuplicateDetectionService:
             True if duplicate found, False otherwise
         """
         lookback_hours = lookback_hours or DuplicateDetectionService.LOOKBACK_HOURS
-        lookback_time = datetime.now(datetime.timezone.utc) - timedelta(hours=lookback_hours)
+        lookback_time = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
 
         existing_message = (
             session.query(Message)
@@ -88,7 +89,7 @@ class DuplicateDetectionService:
             Similar message if found, None otherwise
         """
         lookback_hours = lookback_hours or DuplicateDetectionService.LOOKBACK_HOURS
-        lookback_time = datetime.now(datetime.timezone.utc) - timedelta(hours=lookback_hours)
+        lookback_time = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
 
         recent_messages = (
             session.query(Message)
@@ -116,7 +117,7 @@ class DuplicateDetectionService:
 
 
     @staticmethod
-    def _calculate_smilarity(text1: str, text2: str) -> float:
+    def _calculate_similarity(text1: str, text2: str) -> float:
         """
         Calculate text similarity using simple ratio.
         
@@ -160,7 +161,7 @@ class DuplicateDetectionService:
         Note:
             Only deletes messages that are NOT signals to preserve signal history.
         """
-        cutoff_date = datetime.now(datetime.timezone.utc) - timedelta(days=days_to_keep)
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_to_keep)
 
         deleted_count = (
             session.query(Message)
@@ -174,5 +175,105 @@ class DuplicateDetectionService:
         session.commit()
         logger.info(f"Deleted {deleted_count} old non-signal messages")
         return deleted_count
+
+    @staticmethod
+    def is_duplicate(
+        session: Session,
+        message: Message,
+        channel_id: str,
+        lookback_hours: Optional[int] = None,
+        similarity_threshold: float = 0.95,
+    ) -> bool:
+        """
+        Check if a message is a duplicate based on text similarity.
+        
+        Checks both exact matches (by telegram_message_id) and similar messages
+        (by text content). Excludes the message being checked if it has an ID.
+        
+        Args:
+            session: Database session
+            message: Message object to check
+            channel_id: Channel identifier
+            lookback_hours: Hours to look back (default: LOOKBACK_HOURS)
+            similarity_threshold: Similarity threshold for fuzzy matching (0-1)
+        
+        Returns:
+            True if duplicate found, False otherwise
+        """
+        lookback_hours = lookback_hours or DuplicateDetectionService.LOOKBACK_HOURS
+        lookback_time = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+        
+        # Check for exact duplicate by telegram_message_id, excluding this message
+        query = session.query(Message).filter(
+            Message.channel_id == channel_id,
+            Message.telegram_message_id == message.telegram_message_id,
+            Message.created_at >= lookback_time,
+        )
+        # Exclude the message being checked if it has an ID
+        if message.id:
+            query = query.filter(Message.id != message.id)
+        
+        existing_message = query.first()
+        if existing_message:
+            return True
+        
+        # Then check for similar text content, excluding this message
+        if message.text:
+            recent_messages = (
+                session.query(Message)
+                .filter(
+                    Message.channel_id == channel_id,
+                    Message.created_at >= lookback_time,
+                )
+            )
+            # Exclude the message being checked if it has an ID
+            if message.id:
+                recent_messages = recent_messages.filter(Message.id != message.id)
+            
+            recent_messages = (
+                recent_messages
+                .order_by(Message.created_at.desc())
+                .limit(100)
+                .all()
+            )
+            
+            for existing_msg in recent_messages:
+                if existing_msg.text:
+                    similarity = DuplicateDetectionService._calculate_similarity(
+                        message.text, existing_msg.text
+                    )
+                    if similarity >= similarity_threshold:
+                        return True
+        
+        return False
+
+    @staticmethod
+    def detect_or_raise(
+        session: Session,
+        message: Message,
+        channel_id: str,
+        lookback_hours: Optional[int] = None,
+        similarity_threshold: float = 0.95,
+    ) -> None:
+        """
+        Detect duplicate and raise exception if found.
+        
+        Args:
+            session: Database session
+            message: Message object to check
+            channel_id: Channel identifier
+            lookback_hours: Hours to look back (default: LOOKBACK_HOURS)
+            similarity_threshold: Similarity threshold for fuzzy matching (0-1)
+        
+        Raises:
+            DuplicateSignalError: If duplicate is detected
+        """
+        if DuplicateDetectionService.is_duplicate(
+            session, message, channel_id, lookback_hours, similarity_threshold
+        ):
+            raise DuplicateSignalError(
+                f"Duplicate message detected: channel_id={channel_id}, "
+                f"telegram_message_id={message.telegram_message_id}"
+            )
 
 __all__ = ["DuplicateDetectionService"]
