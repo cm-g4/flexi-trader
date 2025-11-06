@@ -1,19 +1,8 @@
 """Message model for raw Telegram message storage."""
 
 from datetime import datetime
-from typing import Optional
 
-from sqlalchemy import (
-    JSON, 
-    BigInteger,
-    Boolean, 
-    DateTime,
-    ForeignKey, 
-    Index,
-    Integer, 
-    String, 
-    Text,
-)
+from sqlalchemy import JSON, BigInteger, Boolean, Column, DateTime, ForeignKey, Integer, String, Text
 
 from app.database import Base
 
@@ -44,34 +33,34 @@ class Message(Base):
 
 
     # Primary key
-    id = String(36), primary_key=True
+    id = Column(String(36), primary_key=True)
 
 
     # Foreign keys
-    channel_id = String(36, ForeignKey("channels.id"), nullable=False)
+    channel_id = Column(String(36), ForeignKey("channels.id"), nullable=False)
 
 
     # Telegram identifiers
-    telegram_message_id = BigInteger(nullable=False)
-    telegram_chat_id = BigInteger(nullable=False)
-    telegram_sender_id = BigInteger(nullable=True)
+    telegram_message_id = Column(BigInteger, nullable=False)
+    telegram_chat_id = Column(BigInteger, nullable=False)
+    telegram_sender_id = Column(BigInteger, nullable=True)
 
     # Message content
-    text = Text(nullable=True)
+    text = Column(Text, nullable=True)
 
     # Processing status
-    is_signal = Boolean(default=False, nullable=False)
-    processed = Boolean(default=False, nullable=False)
-    processed_at = DateTime(timezone=True, nullable=True)
-    extraction_attempts = Integer(default=0, nullable=False)
+    is_signal = Column(Boolean, default=False, nullable=False)
+    processed = Column(Boolean, default=False, nullable=False)
+    processed_at = Column(DateTime, timezone=True, nullable=True)
+    extraction_attempts = Column(Integer, default=0, nullable=False)
 
     # Timestamps
-    created_at = DateTime(
+    created_at = Column(DateTime,
         timezone=True,
         default=datetime.now(datetime.timezone.utc),
         nullable=False,
     )
-    updated_at = DateTime(
+    updated_at = Column(DateTime,
         timezone=True,
         default=datetime.now(datetime.timezone.utc),
         onupdate=datetime.now(datetime.timezone.utc),
@@ -79,7 +68,7 @@ class Message(Base):
     )
 
     # Additional metadata
-    raw_data = JSON(nullable=True)
+    raw_data = Column(JSON, nullable=True)
 
     def __repr__(self) -> str:
         return (
@@ -103,5 +92,21 @@ class Message(Base):
         """Increment extraction attempt counter."""
         self.extraction_attempts += 1
         self.updated_at = datetime.now(datetime.timezone.utc)
+
+    def to_dict(self) -> dict:
+        """Convert message to dictionary."""
+        return {
+            "id": self.id,
+            "channel_id": self.channel_id,
+            "telegram_message_id": self.telegram_message_id,
+            "sender_id": self.sender_id,
+            "sender_name": self.sender_name,
+            "message_text": self.message_text,
+            "is_duplicate": self.is_duplicate,
+            "duplicate_of_id": self.duplicate_of_id,
+            "is_signal": self.is_signal,
+            "created_at": self.created_at.isoformat(),
+            "received_at": self.received_at.isoformat(),
+        }
 
 __all__ = ["Message"]

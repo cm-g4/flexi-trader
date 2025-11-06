@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text, func
 
 from app.database import Base
 
@@ -28,28 +28,28 @@ class Channel(Base):
     __tablename__ = "channels"
 
     # Primary key
-    id = String(36), primary_key=True
+    id = Column(String(36), primary_key=True)
 
     # User relationship (to be added in Phase 2 with user management)
-    user_id = String(36)
+    user_id = Column(String(36))
 
     # Channel information
-    name = String(255, nullable=False)
-    description = Text(nullable=True)
-    telegram_channel_id = Integer(nullable=False)
-    telegram_chat_id = Integer(nullable=False)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    telegram_channel_id = Column(Integer, nullable=False)
+    telegram_chat_id = Column(Integer, nullable=False)
     
     # Status
-    is_active = Boolean(default=True)
-    provider_name = String(255, nullable=False)
+    is_active = Column(Boolean, default=True)
+    provider_name = Column(String(255), nullable=False)
 
     # Timestamps
-    created_at = DateTime(
+    created_at = Column(DateTime,
         timezone=True, 
         default=datetime.now(datetime.timezone.utc), 
         nullable=False,
     )
-    updated_at = DateTime(
+    updated_at = Column(DateTime,
         timezone=True, 
         default=datetime.now(datetime.timezone.utc),
         onupdate=datetime.now(datetime.timezone.utc),
@@ -57,8 +57,8 @@ class Channel(Base):
     )
 
     # Statistics
-    signal_count = Integer(default=0)
-    last_signal_at = DateTime(nullable=True)
+    signal_count = Column(Integer, default=0)
+    last_signal_at = Column(DateTime, nullable=True)
 
     # Relationships (to be populated in future sprints)
     # messages = relationship("Message", back_populates="channel")
@@ -70,5 +70,22 @@ class Channel(Base):
             f"<Channel(id={self.id}, name='{self.name}', "
             f"telegram_id={self.telegram_channel_id}, active={self.is_active})>"
         )
+    
+    def to_dict(self) -> dict:
+        """Convert channel to dictionary."""
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "name": self.name,
+            "description": self.description,
+            "telegram_channel_id": self.telegram_channel_id,
+            "telegram_chat_id": self.telegram_chat_id,
+            "is_active": self.is_active,
+            "provider_name": self.provider_name,
+            "signal_count": self.signal_count,
+            "last_signal_at": self.last_signal_at.isoformat() if self.last_signal_at else None,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+        }
 
 __all__ = ["Channel"]
