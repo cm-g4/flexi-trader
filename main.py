@@ -94,12 +94,24 @@ class Application:
                 logger.info("Message queue workers started")
 
             logger.info("Starting Telegram bot...")
-            # This will block until the bot is stopped (Ctrl+C)
+            # Use start() instead of run_polling() to work with existing event loop
             if self.bot_handler and self.bot_handler.application:
-                await self.bot_handler.application.run_polling()
+                await self.bot_handler.application.start()
+                logger.info("Telegram bot started")
+                
+                # Start polling with updater
+                await self.bot_handler.application.updater.start_polling(
+                    allowed_updates=["message", "edited_message", "channel_post"]
+                )
+                logger.info("Bot polling started")
+                
+                # Keep running until interrupted
+                try:
+                    while True:
+                        await asyncio.sleep(1)
+                except KeyboardInterrupt:
+                    logger.info("Polling interrupted")
 
-        except KeyboardInterrupt:
-            logger.info("Interrupted by user")
         except Exception as e:
             logger.error(f"Application error: {e}", exc_info=True)
             raise
@@ -117,9 +129,18 @@ class Application:
                 logger.info("Message queue workers stopped")
 
             # Stop bot
-            if self.bot_handler:
-                await self.bot_handler.stop_bot()
-                logger.info("Telegram bot stopped")
+            if self.bot_handler and self.bot_handler.application:
+                try:
+                    await self.bot_handler.application.updater.stop_polling()
+                    logger.info("Bot polling stopped")
+                except Exception as e:
+                    logger.warning(f"Error stopping polling: {e}")
+                
+                try:
+                    await self.bot_handler.application.stop()
+                    logger.info("Telegram bot stopped")
+                except Exception as e:
+                    logger.warning(f"Error stopping application: {e}")
 
             logger.info("Application shutdown complete")
 
@@ -135,7 +156,7 @@ async def main():
         # Initialize all components
         await app.initialize()
         
-        # Run the application (this blocks on bot polling)
+        # Run the application
         await app.run()
 
     except KeyboardInterrupt:

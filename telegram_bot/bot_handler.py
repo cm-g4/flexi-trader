@@ -86,7 +86,7 @@ class TelegramBotHandler:
             CommandHandler("signals", self.command_signals)
         )
 
-# Message handler (must be last)
+        # Message handler (must be last)
         self.application.add_handler(
             MessageHandler(
                 filters.TEXT & ~filters.COMMAND,
@@ -180,6 +180,7 @@ class TelegramBotHandler:
             # Queue message for processing if queue available
             if self.message_queue:
                 try:
+                    import asyncio
                     await self.message_queue.enqueue_message(message)
                     logger.debug(
                         f"Message queued: id={message.id}, "
@@ -366,23 +367,16 @@ class TelegramBotHandler:
         finally:
             session.close()
 
-    async def start_polling(self) -> None:
-        """
-        Start the bot in polling mode.
-        
-        Raises:
-            RuntimeError: If bot not initialized
-        """
-        if not self.application:
-            raise RuntimeError("Bot not initialized. Call initialize_bot() first.")
-
-        logger.info("Starting Telegram bot polling...")
-        await self.application.run_polling()
-
     async def stop_bot(self) -> None:
         """Stop the bot gracefully."""
         if self.application:
-            await self.application.stop()
-            logger.info("Telegram bot stopped")
+            try:
+                await self.application.stop()
+                logger.info("Telegram bot stopped")
+            except RuntimeError as e:
+                if "not running" in str(e).lower():
+                    logger.info("Bot already stopped")
+                else:
+                    logger.error(f"Error stopping bot: {e}")
 
 __all__ = ["TelegramBotHandler"]
