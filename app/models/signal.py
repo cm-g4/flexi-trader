@@ -2,9 +2,7 @@
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from re import template
-import signal
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
@@ -12,13 +10,14 @@ from sqlalchemy.orm import relationship
 
 from app.database import Base
 
+
 class Signal(Base):
     """Signal model for storing extracted trading signals."""   
 
     __tablename__ = "signals"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    channel_id =Column(UUID(as_uuid=True), ForeignKey("channels.id"), nullable=False)
+    channel_id = Column(UUID(as_uuid=True), ForeignKey("channels.id"), nullable=False)
     template_id = Column(UUID(as_uuid=True), ForeignKey("templates.id"), nullable=False)
     user_id = Column(String(50), nullable=False)
 
@@ -40,9 +39,9 @@ class Signal(Base):
     # Signal details
     signal_type = Column(String(10), nullable=False) # BUY, SELL, LONG, SHORT
     timeframe = Column(String(10), nullable=True) # 1M, 5M, 15M, 30M, 1H, 4H, 1D
-    status = Column(String(10), nullable=False, default="PENDING") # PENDING, FILLED, CANCELLED, EXPIRED, 
+    status = Column(String(10), nullable=False, default="PENDING") # PENDING, FILLED, CANCELLED, EXPIRED
     
-    # COnfidence  and metadata
+    # Confidence and metadata
     confidence_score = Column(Numeric(3, 2), default=1.0, nullable=False)  
     extraction_metadata = Column(JSON, nullable=True)
     risk_reward_ratio = Column(Numeric(5, 2), nullable=True)

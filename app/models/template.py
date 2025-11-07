@@ -9,6 +9,7 @@ from sqlalchemy.orm import relationship
 
 from app.database import Base
 
+
 class Template(Base):
     """Database model for a template."""
 
@@ -54,6 +55,7 @@ class Template(Base):
     def __repr__(self):
         return f"<Template(id={self.id}, name={self.name}, channel_id={self.channel_id})>"
 
+
 class ExtractionHistory(Base):
     """History of template extractions for tracking success rate."""
 
@@ -63,7 +65,7 @@ class ExtractionHistory(Base):
     template_id = Column(UUID(as_uuid=True), ForeignKey("templates.id"), nullable=False)
     signal_id = Column(UUID(as_uuid=True), ForeignKey("signals.id"), nullable=False)
 
-    # Extraation attempt details
+    # Extraction attempt details
     was_successful = Column(Boolean, default=True, nullable=False)
     error_message = Column(Text, nullable=True)
     extracted_data = Column(JSON, nullable=True)

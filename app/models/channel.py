@@ -1,13 +1,14 @@
 """Channel model for Telegram channel/group storage."""
 
 from datetime import datetime, timezone
+from uuid import uuid4
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text, func
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
-from uuid import UUID, uuid4
 
 from app.database import Base
+
 
 class Channel(Base):
     """
@@ -38,8 +39,8 @@ class Channel(Base):
     description = Column(Text, nullable=True)
 
     # Telegram information
-    telegram_channel_id = Column(Integer, nullable=False)
-    telegram_chat_id = Column(Integer, nullable=False)
+    telegram_channel_id = Column(BigInteger, nullable=False)
+    telegram_chat_id = Column(BigInteger, nullable=False)
     
     # Status
     is_active = Column(Boolean, default=True)
