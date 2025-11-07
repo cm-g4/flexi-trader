@@ -9,17 +9,23 @@ from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.exceptions import TemplateError, ValidationError
 from app.logging_config import logger
-from app.models import Template, ExtractionHistory
+from app.models import Template, ExtractionHistory, Channel, Signal
 from app.services.extraction_engine import ExtractionEngine
-from app.validators import Validator
 
 class TemplateManager:
-    """Manages template creation, validation, and testing."""
+    """Manages template creation, validation, testing, and CRUD operations."""
 
 
-    def __init__(self):
-        """Initialize template manager."""
+    def __init__(self, db: Optional[Session] = None):
+        """
+        Initialize template manager.
+
+        Args:
+            db: Database session (optional, will create if not provided)
+        """
+        self.db = db or SessionLocal()
         self.extraction_engine = ExtractionEngine()
+
 
     @staticmethod
     def validate_template_config(
@@ -29,7 +35,7 @@ class TemplateManager:
         Validate template extraction configuration structure.
 
         Args:
-            config: Extraction configuration dict
+            template_config: Extraction configuration dict
 
         Returns:
             True if valid
@@ -37,10 +43,12 @@ class TemplateManager:
         Raises:
             TemplateError: If configuration is invalid
         """
+
         required_keys = {"fields"}
 
         if not isinstance(template_config, dict):
             raise TemplateError("Template configuration must be a dictionary")
+
         
         missing_keys = required_keys - set(template_config.keys())
         if missing_keys:
@@ -61,14 +69,14 @@ class TemplateManager:
                 raise TemplateError(
                     f"Field '{field_name}' config must be a dictionary"
                 )
-            
+
             extraction_method = field_config.get("extraction_method", "regex")
             if extraction_method not in {"regex", "line", "marker", "position"}:
                 raise TemplateError(
                     f"Invalid extraction method '{extraction_method}' for "
                     f"field '{field_name}'"
                 )
-            
+
             # Regex method requires a pattern
             if extraction_method == "regex" and "regex_pattern" not in field_config:
                 raise TemplateError(
@@ -85,43 +93,39 @@ class TemplateManager:
         created_by: UUID,
         description: Optional[str] = None,
         test_message: Optional[str] = None,
-        db: Optional[Session] = None,
     ) -> Template:
         """
         Create a new template.
 
         Args:
-            channel_id: Channel ID this template belongs to
+            channel_id: Associated channel ID
             name: Template name
             extraction_config: Extraction configuration
-            created_by: User ID creating the template
-            description: Optional description
+            created_by: User ID creating template
+            description: Optional template description
             test_message: Optional sample message for testing
-            db: Database session
 
         Returns:
-            Created Template object
+            Created template object
 
         Raises:
-            TemplateError: If configuration is invalid
-            ValidationError: If inputs are invalid
+            TemplateError: If validation fails
         """
-        # Validate inputs
-        if not name or not isinstance(name, str):
-            raise ValidationError("Template name must be a non-empty string")
-        
-        if len(name) > 255:
-            raise ValidationError("Template name must be max 255 characters")
-        
-        # Validate config
-        self.validate_template_config(extraction_config)
-        
-        db = db or SessionLocal()
-        
         try:
+            # Validate configuration
+            self.validate_template_config(extraction_config)
+
+            # Check channel exists
+            channel = self.db.query(Channel).filter(
+                Channel.id == channel_id
+            ).first()
+            if not channel:
+                raise TemplateError(f"Channel {channel_id} not found")
+
+            # Create template
             template = Template(
                 channel_id=channel_id,
-                name=name.strip(),
+                name=name,
                 description=description,
                 extraction_config=extraction_config,
                 test_message=test_message,
@@ -129,181 +133,180 @@ class TemplateManager:
                 is_active=True,
                 extraction_success_rate=0,
             )
-            
-            db.add(template)
-            db.commit()
-            db.refresh(template)
-            
-            logger.info(f"Template created: {template.id} - {name}")
+
+            self.db.add(template)
+            self.db.commit()
+            self.db.refresh(template)
+
+            logger.info(f"Template created: id={template.id}, name={name}")
             return template
+
+        except TemplateError:
+            self.db.rollback()
+            raise
         except Exception as e:
-            db.rollback()
+            self.db.rollback()
             logger.error(f"Failed to create template: {e}")
             raise TemplateError(f"Failed to create template: {str(e)}")
 
+    def get_template(self, template_id: UUID) -> Optional[Template]:
+        """
+        Retrieve a template by ID.
+
+        Args:
+            template_id: Template ID
+
+        Returns:
+            Template object or None if not found
+        """
+        return self.db.query(Template).filter(
+            Template.id == template_id
+        ).first()
+
+    def get_channel_templates(
+        self,
+        channel_id: UUID,
+        active_only: bool = True
+    ) -> List[Template]:
+        """
+        Get all templates for a channel.
+
+        Args:
+            channel_id: Channel ID
+            active_only: Only return active templates
+
+        Returns:
+            List of templates
+        """
+        query = self.db.query(Template).filter(Template.channel_id == channel_id)
+
+        if active_only:
+            query = query.filter(Template.is_active == True)
+
+        return query.all()
+    
+    def update_template(
+        self,
+        template_id: UUID,
+        **kwargs
+    ) -> Template:
+        """
+        Update template properties.
+
+        Args:
+            template_id: Template ID
+            **kwargs: Fields to update (name, description, extraction_config, etc.)
+
+        Returns:
+            Updated template
+
+        Raises:
+            TemplateError: If template not found or update fails
+        """
+        try:
+            template = self.get_template(template_id)
+            if not template:
+                raise TemplateError(f"Template {template_id} not found")
+
+            # Validate extraction config if being updated
+            if "extraction_config" in kwargs:
+                self.validate_template_config(kwargs["extraction_config"])
+                # Increment version when config changes
+                template.version += 1
+
+            # Update fields
+            for key, value in kwargs.items():
+                if hasattr(template, key):
+                    setattr(template, key, value)
+
+            template.updated_at = datetime.now(timezone.utc)
+            self.db.commit()
+            self.db.refresh(template)
+
+            logger.info(f"Template updated: id={template_id}")
+            return template
+
+        except TemplateError:
+            self.db.rollback()
+            raise
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Failed to update template: {e}")
+            raise TemplateError(f"Failed to update template: {str(e)}")
+
+    def delete_template(self, template_id: UUID) -> bool:
+        """
+        Delete a template.
+
+        Args:
+            template_id: Template ID
+
+        Returns:
+            True if deleted, False if not found
+        """
+        try:
+            template = self.get_template(template_id)
+            if not template:
+                return False
+
+            self.db.delete(template)
+            self.db.commit()
+
+            logger.info(f"Template deleted: id={template_id}")
+            return True
+
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Failed to delete template: {e}")
+            raise TemplateError(f"Failed to delete template: {str(e)}")
+
     def test_template(
         self,
-        template: Template,
-        test_message: str,
+        template_id: UUID,
+        test_message: str
     ) -> Dict[str, Any]:
         """
         Test a template against a sample message.
 
         Args:
-            template: Template to test
-            test_message: Sample message to test with
-
-        Returns:
-            Dict with 'success', 'extracted_data', and 'errors'
-        """
-        if not test_message or not isinstance(test_message, str):
-            raise ValidationError("Test message must be a non-empty string")
-        
-        logger.info(f"Testing template {template.id} with sample message")
-        
-        result = self.extraction_engine.test_extraction(
-            test_message,
-            template.extraction_config,
-        )
-        
-        return result
-
-    def update_template(
-        self,
-        template_id: UUID,
-        updates: Dict[str, Any],
-        db: Optional[Session] = None,
-    ) -> Template:
-        """
-        Update a template.
-
-        Args:
-            template_id: Template to update
-            updates: Dictionary of fields to update
-            db: Database session
-
-        Returns:
-            Updated Template object
-
-        Raises:
-            TemplateError: If update fails
-        """
-        db = db or SessionLocal()
-        
-        try:
-            template = db.query(Template).filter(Template.id == template_id).first()
-            
-            if not template:
-                raise TemplateError(f"Template {template_id} not found")
-            
-            # Validate extraction_config if being updated
-            if "extraction_config" in updates:
-                self.validate_template_config(updates["extraction_config"])
-                # Increment version
-                template.version += 1
-            
-            # Update allowed fields
-            allowed_fields = {
-                "name", "description", "extraction_config", "test_message", "is_active"
-            }
-            for field, value in updates.items():
-                if field in allowed_fields:
-                    setattr(template, field, value)
-            
-            template.updated_at = datetime.utcnow()
-            db.commit()
-            db.refresh(template)
-            
-            logger.info(f"Template updated: {template_id}")
-            return template
-        except TemplateError:
-            raise
-        except Exception as e:
-            db.rollback()
-            logger.error(f"Failed to update template: {e}")
-            raise TemplateError(f"Failed to update template: {str(e)}")
-
-    def get_template(
-        self,
-        template_id: UUID,
-        db: Optional[Session] = None,
-    ) -> Optional[Template]:
-        """
-        Get a template by ID.
-
-        Args:
             template_id: Template ID
-            db: Database session
+            test_message: Sample message to test extraction
 
         Returns:
-            Template object or None
+            Dictionary with test results including extracted data and errors
         """
-        db = db or SessionLocal()
-        return db.query(Template).filter(Template.id == template_id).first()
-
-    def list_templates(
-        self,
-        channel_id: UUID,
-        active_only: bool = False,
-        db: Optional[Session] = None,
-    ) -> List[Template]:
-        """
-        List templates for a channel.
-
-        Args:
-            channel_id: Channel ID
-            active_only: Only return active templates
-            db: Database session
-
-        Returns:
-            List of templates
-        """
-        db = db or SessionLocal()
-        query = db.query(Template).filter(Template.channel_id == channel_id)
-        
-        if active_only:
-            query = query.filter(Template.is_active == True)
-        
-        return query.order_by(Template.created_at.desc()).all()
-
-    def delete_template(
-        self,
-        template_id: UUID,
-        db: Optional[Session] = None,
-    ) -> bool:
-        """
-        Delete a template (soft delete by deactivating).
-
-        Args:
-            template_id: Template to delete
-            db: Database session
-
-        Returns:
-            True if successful
-
-        Raises:
-            TemplateError: If deletion fails
-        """
-        db = db or SessionLocal()
-        
         try:
-            template = db.query(Template).filter(Template.id == template_id).first()
-            
+            template = self.get_template(template_id)
             if not template:
-                raise TemplateError(f"Template {template_id} not found")
-            
-            template.is_active = False
-            template.updated_at = datetime.utcnow()
-            db.commit()
-            
-            logger.info(f"Template deleted (deactivated): {template_id}")
-            return True
-        except TemplateError:
-            raise
+                return {
+                    "success": False,
+                    "error": f"Template {template_id} not found",
+                    "extracted_data": {},
+                    "errors": []
+                }
+
+            # Run extraction
+            result = self.extraction_engine.test_extraction(
+                test_message,
+                template.extraction_config
+            )
+
+            return {
+                "success": result["success"],
+                "extracted_data": result.get("extracted_data", {}),
+                "errors": result.get("errors", []),
+                "template_id": str(template_id),
+                "template_name": template.name,
+            }
+
         except Exception as e:
-            db.rollback()
-            logger.error(f"Failed to delete template: {e}")
-            raise TemplateError(f"Failed to delete template: {str(e)}")
+            logger.error(f"Template test failed: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "extracted_data": {},
+                "errors": []
+            }
 
     def update_extraction_stats(
         self,
@@ -313,7 +316,6 @@ class TemplateManager:
         error_message: Optional[str] = None,
         original_message: Optional[str] = None,
         signal_id: Optional[UUID] = None,
-        db: Optional[Session] = None,
     ) -> float:
         """
         Update template extraction statistics.
@@ -325,51 +327,132 @@ class TemplateManager:
             error_message: Error message (if failed)
             original_message: Original message
             signal_id: Associated signal ID (optional)
-            db: Database session
 
         Returns:
             Updated success rate (0-100)
         """
-        db = db or SessionLocal()
-        
         try:
-            template = db.query(Template).filter(Template.id == template_id).first()
+            template = self.get_template(template_id)
             if not template:
                 return 0.0
-            
+
             # Create history record
             history = ExtractionHistory(
                 template_id=template_id,
-                signal_id=signal_id,
+                signal_id=signal_id or UUID("00000000-0000-0000-0000-000000000000"),
                 was_successful=was_successful,
                 extracted_data=extracted_data,
                 error_message=error_message,
                 original_message=original_message or "",
             )
-            db.add(history)
-            
+            self.db.add(history)
+
             # Calculate new success rate
-            total_count = db.query(ExtractionHistory).filter(
+            total_count = self.db.query(ExtractionHistory).filter(
                 ExtractionHistory.template_id == template_id
             ).count()
-            
-            success_count = db.query(ExtractionHistory).filter(
+
+            success_count = self.db.query(ExtractionHistory).filter(
                 ExtractionHistory.template_id == template_id,
                 ExtractionHistory.was_successful == True,
             ).count()
-            
+
             if total_count > 0:
                 success_rate = int((success_count / total_count) * 100)
                 template.extraction_success_rate = success_rate
                 template.last_used_at = datetime.now(timezone.utc)
-            
-            db.commit()
-            
+
+            self.db.commit()
+
+            logger.debug(
+                f"Extraction stats updated: template={template_id}, "
+                f"success_rate={template.extraction_success_rate}%"
+            )
+
             return float(template.extraction_success_rate)
+
         except Exception as e:
+            self.db.rollback()
             logger.error(f"Failed to update extraction stats: {e}")
-            db.rollback()
             return 0.0
 
+    def activate_template(self, template_id: UUID) -> Optional[Template]:
+        """
+        Activate a template.
 
-__all__ = ["TemplateManager"]
+        Args:
+            template_id: Template ID
+
+        Returns:
+            Updated template or None if not found
+        """
+        return self.update_template(template_id, is_active=True)
+
+    def deactivate_template(self, template_id: UUID) -> Optional[Template]:
+        """
+        Deactivate a template.
+
+        Args:
+            template_id: Template ID
+
+        Returns:
+            Updated template or None if not found
+        """
+        return self.update_template(template_id, is_active=False)
+
+    def get_template_stats(self, template_id: UUID) -> Dict[str, Any]:
+        """
+        Get template statistics.
+
+        Args:
+            template_id: Template ID
+
+        Returns:
+            Dictionary with template statistics
+        """
+        try:
+            template = self.get_template(template_id)
+            if not template:
+                return {}
+
+            total_history = self.db.query(ExtractionHistory).filter(
+                ExtractionHistory.template_id == template_id
+            ).count()
+
+            success_history = self.db.query(ExtractionHistory).filter(
+                ExtractionHistory.template_id == template_id,
+                ExtractionHistory.was_successful == True,
+            ).count()
+
+            return {
+                "template_id": str(template_id),
+                "name": template.name,
+                "version": template.version,
+                "is_active": template.is_active,
+                "extraction_success_rate": template.extraction_success_rate,
+                "total_extractions": total_history,
+                "successful_extractions": success_history,
+                "failed_extractions": total_history - success_history,
+                "created_at": template.created_at.isoformat(),
+                "updated_at": template.updated_at.isoformat(),
+                "last_used_at": template.last_used_at.isoformat() if template.last_used_at else None,
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to get template stats: {e}")
+            return {}
+
+    def close(self):
+        """Close database session."""
+        if self.db:
+            self.db.close()
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        self.close()
+
+__all__ = ["TemplateManager"]        
