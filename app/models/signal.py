@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from re import template
 import signal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
@@ -20,7 +20,7 @@ class Signal(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     channel_id =Column(UUID(as_uuid=True), ForeignKey("channels.id"), nullable=False)
     template_id = Column(UUID(as_uuid=True), ForeignKey("templates.id"), nullable=False)
-    user_id = Column(UUID(as_uuid=True), nullable=False)
+    user_id = Column(String(50), nullable=False)
 
     # Original message reference
     original_message_id = Column(Integer, nullable=True)

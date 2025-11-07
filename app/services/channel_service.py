@@ -1,6 +1,6 @@
 """Channel management service for Telegram channel operations."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
@@ -35,7 +35,7 @@ class ChannelService:
         
         Args:
             session: Database session
-            telegram_channel_id: Telegram's channel/group ID
+            telegram_channel_id: Telegram's channel/group ID (can be negative for private channels)
             telegram_chat_id: Telegram's chat ID
             name: Display name for channel
             user_id: User who added the channel
@@ -55,9 +55,11 @@ class ChannelService:
             if not name or not name.strip():
                 raise ValidationError("Channel name cannot be empty", field="name")
 
-            if telegram_channel_id <= 0 or telegram_chat_id <= 0:
+            # Telegram IDs can be negative (for private channels) or positive (for public)
+            # Both are valid - just validate they're integers
+            if not isinstance(telegram_channel_id, int) or not isinstance(telegram_chat_id, int):
                 raise ValidationError(
-                    "Channel IDs must be positive integers",
+                    "Channel IDs must be valid integers",
                     field="telegram_channel_id",
                 )
             
@@ -126,7 +128,7 @@ class ChannelService:
         
         Args:
             session: Database session
-            telegram_channel_id: Telegram's channel ID
+            telegram_channel_id: Telegram's channel ID (can be negative)
         
         Returns:
             Channel object if found, None otherwise
@@ -198,7 +200,7 @@ class ChannelService:
             raise ChannelError(f"Channel not found: {channel_id}")
 
         channel.is_active = True
-        channel.updated_at = datetime.now(datetime.timezone.utc)
+        channel.updated_at = datetime.now(timezone.utc)
         session.add(channel)
         session.flush()
 
@@ -225,7 +227,7 @@ class ChannelService:
             raise ChannelError(f"Channel not found: {channel_id}")
 
         channel.is_active = False
-        channel.updated_at = datetime.now(datetime.timezone.utc)
+        channel.updated_at = datetime.now(timezone.utc)
         session.add(channel)
         session.flush()
 
@@ -267,7 +269,7 @@ class ChannelService:
         if provider_name:
             channel.provider_name = provider_name.strip()
 
-            channel.updated_at = datetime.now(datetime.timezone.utc)
+        channel.updated_at = datetime.now(timezone.utc)
         session.add(channel)
         session.flush()
 
@@ -297,8 +299,8 @@ class ChannelService:
             raise ChannelError(f"Channel not found: {channel_id}")
 
         channel.signal_count += 1
-        channel.last_signal_at = datetime.now(datetime.timezone.utc)
-        channel.updated_at = datetime.now(datetime.timezone.utc)
+        channel.last_signal_at = datetime.now(timezone.utc)
+        channel.updated_at = datetime.now(timezone.utc)
         session.add(channel)
         session.flush()
 

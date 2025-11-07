@@ -1,21 +1,28 @@
-"""Telegram bot message handler."""
+"""Telegram bot message handler with channel management."""
 
 import logging
 from typing import Optional
+from uuid import uuid4
 
 # Import from python-telegram-bot library
-# No conflict anymore since local package is renamed to telegram_bot
 from telegram import Update
-from telegram.ext import Application, ContextTypes
+from telegram.ext import Application, ContextTypes, ConversationHandler
 
 from app.config import settings
 from app.database import SessionLocal
-from app.exceptions import ChannelError, DatabaseError
+from app.exceptions import ChannelError, DatabaseError, ValidationError
 from app.logging_config import logger
 from app.services.channel_service import ChannelService
 from app.services.message_queue import MessageQueueService
 from app.services.message_processor import MessageProcessorService
 from app.services.message_receiver import MessageReceiverService
+
+
+# Conversation states for add_channel
+ADD_CHANNEL_ID = 1
+ADD_CHANNEL_NAME = 2
+ADD_CHANNEL_DESCRIPTION = 3
+ADD_CHANNEL_PROVIDER = 4
 
 
 class TelegramBotHandler:
@@ -26,6 +33,7 @@ class TelegramBotHandler:
     - Bot initialization
     - Message routing
     - Command handling
+    - Channel management
     - Error handling
     """
 
@@ -55,7 +63,7 @@ class TelegramBotHandler:
         
         logger.info("Initializing Telegram bot...")
 
-        #Create application
+        # Create application
         self.application = Application.builder().token(
             settings.telegram_bot_token
         ).build()
@@ -63,7 +71,7 @@ class TelegramBotHandler:
         # Add handlers
         self._setup_handlers()
 
-        logger.info(f"Telegram bot initialized successfully with token: {settings.telegram_bot_token}")
+        logger.info("Telegram bot initialized successfully")
 
     def _setup_handlers(self) -> None:
         """Set up bot handlers for commands and messages."""
@@ -85,6 +93,19 @@ class TelegramBotHandler:
         self.application.add_handler(
             CommandHandler("signals", self.command_signals)
         )
+        
+        # Add channel conversation handler
+        add_channel_handler = ConversationHandler(
+            entry_points=[CommandHandler("add_channel", self.command_add_channel)],
+            states={
+                ADD_CHANNEL_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.add_channel_get_id)],
+                ADD_CHANNEL_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.add_channel_get_name)],
+                ADD_CHANNEL_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.add_channel_get_description)],
+                ADD_CHANNEL_PROVIDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.add_channel_get_provider)],
+            },
+            fallbacks=[CommandHandler("cancel", self.cancel_add_channel)],
+        )
+        self.application.add_handler(add_channel_handler)
 
         # Message handler (must be last)
         self.application.add_handler(
@@ -195,7 +216,7 @@ class TelegramBotHandler:
                 # Fallback: process directly if no queue
                 if self.message_processor:
                     try:
-                        success = self.message_processor.process_message(message, session)
+                        success = self.message_processor.process_message(message)
                         if success:
                             logger.info(f"Message processed directly: id={message.id}")
                         else:
@@ -229,6 +250,7 @@ class TelegramBotHandler:
             "Telegram channels.\n\n"
             "Available commands:\n"
             "/channels - List your channels\n"
+            "/add_channel - Add a new channel\n"
             "/signals - View recent signals\n"
             "/help - Show detailed help\n"
         )
@@ -256,6 +278,7 @@ class TelegramBotHandler:
             "Commands:\n"
             "• /start - Show welcome message\n"
             "• /channels - List all your connected channels\n"
+            "• /add_channel - Add a new trading signal channel\n"
             "• /signals - Show recent trading signals\n"
             "• /help - Show this help message\n\n"
             "Features:\n"
@@ -263,11 +286,216 @@ class TelegramBotHandler:
             "• Automatic signal extraction\n"
             "• Centralized signal dashboard\n"
             "• Performance tracking\n\n"
+            "To add a channel:\n"
+            "1. /add_channel\n"
+            "2. Follow the prompts\n"
+            "3. Provide: Channel ID, Name, Description, Provider\n\n"
             "Need help? Contact support!"
         )
 
         await update.message.reply_text(help_text)
         logger.info(f"Help command from user: {update.effective_user.id}")
+
+    async def command_add_channel(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> int:
+        """
+        Handle /add_channel command - start channel addition process.
+        
+        Args:
+            update: Telegram update object
+            context: Callback context
+            
+        Returns:
+            Next conversation state
+        """
+        if not update.message:
+            return ConversationHandler.END
+
+        help_text = (
+            "📝 Add New Channel\n\n"
+            "I'll guide you through adding a trading signal channel.\n\n"
+            "Step 1️⃣: What is the Telegram Channel ID?\n"
+            "(To find it, use @username_to_id_bot or check channel details)\n\n"
+            "Type /cancel to stop."
+        )
+
+        await update.message.reply_text(help_text)
+        logger.info(f"Add channel started by user: {update.effective_user.id}")
+        
+        return ADD_CHANNEL_ID
+
+    async def add_channel_get_id(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> int:
+        """Get channel ID from user."""
+        if not update.message or not update.message.text:
+            return ADD_CHANNEL_ID
+
+        try:
+            channel_id = int(update.message.text.strip())
+            
+            # For private channels, Telegram uses negative IDs starting with -100
+            # Convert if needed
+            if channel_id > 0:
+                channel_id = -100 * 1000000 - channel_id if channel_id < 1000000000 else -channel_id
+            
+            context.user_data["channel_id"] = channel_id
+            
+            await update.message.reply_text(
+                "✅ Got it!\n\n"
+                "Step 2️⃣: What is the channel name?\n"
+                "(e.g., 'Gold Trading Signals', 'Forex Daily')"
+            )
+            
+            return ADD_CHANNEL_NAME
+            
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Invalid channel ID. Please enter a valid number.\n\n"
+                "Type the Telegram Channel ID:"
+            )
+            return ADD_CHANNEL_ID
+
+    async def add_channel_get_name(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> int:
+        """Get channel name from user."""
+        if not update.message or not update.message.text:
+            return ADD_CHANNEL_NAME
+
+        name = update.message.text.strip()
+        
+        if not name or len(name) < 3:
+            await update.message.reply_text(
+                "❌ Channel name too short. Please use at least 3 characters."
+            )
+            return ADD_CHANNEL_NAME
+        
+        context.user_data["name"] = name
+        
+        await update.message.reply_text(
+            "✅ Got it!\n\n"
+            "Step 3️⃣: Channel description (optional)\n"
+            "(e.g., 'Daily gold signals, high accuracy')\n\n"
+            "Type /skip to skip this step."
+        )
+        
+        return ADD_CHANNEL_DESCRIPTION
+
+    async def add_channel_get_description(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> int:
+        """Get channel description from user."""
+        if not update.message or not update.message.text:
+            return ADD_CHANNEL_DESCRIPTION
+
+        text = update.message.text.strip()
+        
+        if text.lower() == "/skip":
+            context.user_data["description"] = None
+        else:
+            context.user_data["description"] = text
+        
+        await update.message.reply_text(
+            "✅ Got it!\n\n"
+            "Step 4️⃣: Provider name (who provides these signals?)\n"
+            "(e.g., 'John Trading', 'Signal Masters')\n\n"
+            "Type /skip to use default."
+        )
+        
+        return ADD_CHANNEL_PROVIDER
+
+    async def add_channel_get_provider(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> int:
+        """Get provider name and create channel."""
+        if not update.message or not update.message.text:
+            return ADD_CHANNEL_PROVIDER
+
+        text = update.message.text.strip()
+        
+        if text.lower() == "/skip":
+            provider_name = "Unknown Provider"
+        else:
+            provider_name = text
+        
+        context.user_data["provider_name"] = provider_name
+        
+        # Now create the channel in database
+        session = SessionLocal()
+        try:
+            user_id = str(update.effective_user.id)
+            
+            print(context.user_data)
+            channel = ChannelService.create_channel(
+                session=session,
+                telegram_channel_id=context.user_data["channel_id"],
+                telegram_chat_id=context.user_data["channel_id"],  # Same for channels
+                name=context.user_data["name"],
+                user_id=user_id,
+                description=context.user_data.get("description"),
+                provider_name=provider_name,
+            )
+            
+            session.commit()
+            
+            success_text = (
+                f"✅ Channel Added Successfully!\n\n"
+                f"📺 Channel: {channel.name}\n"
+                f"👤 Provider: {provider_name}\n"
+                f"🆔 ID: {channel.id}\n\n"
+                f"The bot is now monitoring this channel for trading signals.\n\n"
+                f"Use /channels to see all your channels."
+            )
+            
+            await update.message.reply_text(success_text)
+            logger.info(f"Channel created: {channel.id} by user {user_id}")
+            
+        except ValidationError as e:
+            await update.message.reply_text(
+                f"❌ Validation Error:\n{e.message}\n\n"
+                "Please try again with /add_channel"
+            )
+            logger.warning(f"Validation error: {e.message}")
+            
+        except ChannelError as e:
+            await update.message.reply_text(
+                f"❌ Error:\n{e.message}\n\n"
+                "This channel might already be registered."
+            )
+            logger.warning(f"Channel error: {e.message}")
+            
+        except Exception as e:
+            await update.message.reply_text(
+                "❌ Error adding channel. Please try again."
+            )
+            logger.error(f"Error creating channel: {e}", exc_info=True)
+            
+        finally:
+            session.close()
+        
+        # Clear user data
+        context.user_data.clear()
+        
+        return ConversationHandler.END
+
+    async def cancel_add_channel(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> int:
+        """Handle /cancel command in add_channel conversation."""
+        if not update.message:
+            return ConversationHandler.END
+
+        await update.message.reply_text(
+            "❌ Cancelled.\n\n"
+            "To add a channel later, use /add_channel"
+        )
+        
+        context.user_data.clear()
+        logger.info(f"Add channel cancelled by user: {update.effective_user.id}")
+        
+        return ConversationHandler.END
 
     async def command_channels(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -284,25 +512,27 @@ class TelegramBotHandler:
 
         session = SessionLocal()
         try:
-            # Get all active channels
-            channels = ChannelService.get_active_channels(session)
+            user_id = str(update.effective_user.id)
+            
+            # Get all active channels for this user
+            channels = ChannelService.get_all_channels(session, user_id=user_id)
 
             if not channels:
                 await update.message.reply_text(
                     "📭 No channels connected yet.\n\n"
-                    "Add a channel to start monitoring signals!"
+                    "Use /add_channel to start monitoring signals!"
                 )
                 return
             
             # Format channel list
-            channel_list = "📡 Connected Channels:\n\n"
-            for channel in channels:
+            channel_list = "📡 Your Connected Channels:\n\n"
+            for i, channel in enumerate(channels, 1):
                 status_emoji = "✅" if channel.is_active else "⛔"
                 channel_list += (
-                    f"{status_emoji} {channel.name}\n"
-                    f"   Provider: {channel.provider_name or 'Unknown'}\n"
-                    f"   Signals: {channel.signal_count}\n"
-                    f"   Added: {channel.created_at.strftime('%Y-%m-%d')}\n\n"
+                    f"{status_emoji} {i}. {channel.name}\n"
+                    f"   👤 Provider: {channel.provider_name or 'Unknown'}\n"
+                    f"   📊 Signals: {channel.signal_count}\n"
+                    f"   📅 Added: {channel.created_at.strftime('%Y-%m-%d')}\n\n"
                 )
 
             await update.message.reply_text(channel_list)
@@ -334,8 +564,10 @@ class TelegramBotHandler:
 
         session = SessionLocal()
         try:
-            # Get all channels
-            channels = ChannelService.get_active_channels(session)
+            user_id = str(update.effective_user.id)
+            
+            # Get all channels for this user
+            channels = ChannelService.get_all_channels(session, user_id=user_id)
 
             if not channels:
                 await update.message.reply_text("📭 No channels connected yet.")
@@ -346,7 +578,7 @@ class TelegramBotHandler:
 
             signals_text = f"📊 Signal Summary:\n\n"
             signals_text += f"Total Signals: {total_signals}\n"
-            signals_text += f"Active Channels: {len(channels)}\n\n"
+            signals_text += f"Active Channels: {len([c for c in channels if c.is_active])}\n\n"
 
             for channel in channels[:5]:  # Show top 5
                 signals_text += (

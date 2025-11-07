@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from app.database import Base
 
@@ -31,7 +31,7 @@ class Channel(Base):
     __tablename__ = "channels"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    user_id = Column(UUID(as_uuid=True), nullable=False)
+    user_id = Column(String(50), nullable=False)
 
     # Channel information
     name = Column(String(255), nullable=False)
