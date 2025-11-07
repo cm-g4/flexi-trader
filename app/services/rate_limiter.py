@@ -41,9 +41,9 @@ class RateLimiterService:
         self.user_rate_limit = user_rate_limit
         self.window_size_seconds = window_size_seconds
 
-        self.global_timestamps = list[datetime] = []
-        self.channel_timestamps = Dict[str, list[datetime]] = defaultdict(list)
-        self.user_timestamps = Dict[str, list[datetime]] = defaultdict(list)
+        self.global_timestamps: list[datetime] = []
+        self.channel_timestamps: Dict[str, list[datetime]] = defaultdict(list)
+        self.user_timestamps: Dict[str, list[datetime]] = defaultdict(list)
 
 
     def _cleanup_old_timestamps(

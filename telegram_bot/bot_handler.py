@@ -3,6 +3,8 @@
 import logging
 from typing import Optional
 
+# Import from python-telegram-bot library
+# No conflict anymore since local package is renamed to telegram_bot
 from telegram import Update
 from telegram.ext import Application, ContextTypes
 
@@ -11,7 +13,10 @@ from app.database import SessionLocal
 from app.exceptions import ChannelError, DatabaseError
 from app.logging_config import logger
 from app.services.channel_service import ChannelService
+from app.services.message_queue import MessageQueueService
+from app.services.message_processor import MessageProcessorService
 from app.services.message_receiver import MessageReceiverService
+
 
 class TelegramBotHandler:
     """
@@ -24,9 +29,16 @@ class TelegramBotHandler:
     - Error handling
     """
 
-    def __init__(self):
+    def __init__(
+        self, 
+        message_queue: MessageQueueService, 
+        message_processor: MessageProcessorService,
+    ):
         """Initialize the Telegram bot handlers """
         self.application: Optional[Application] = None
+        self.message_queue = message_queue
+        self.message_processor = message_processor
+        self.session_factory = None
 
     async def initialize_bot(self) -> None:
         """
@@ -58,33 +70,26 @@ class TelegramBotHandler:
         if not self.application:
             raise RuntimeError("Application not initialized")
 
+        from telegram.ext import CommandHandler, MessageHandler, filters
+
         # Command handlers
         self.application.add_handler(
-            __import__("telegram.ext", fromlist=["CommandHandler"]).CommandHandler(
-                "start", self.command_start
-            )
+            CommandHandler("start", self.command_start)
         )
         self.application.add_handler(
-            __import__("telegram.ext", fromlist=["CommandHandler"]).CommandHandler(
-                "help", self.command_help
-            )
+            CommandHandler("help", self.command_help)
         )
         self.application.add_handler(
-            __import__("telegram.ext", fromlist=["CommandHandler"]).CommandHandler(
-                "channels", self.command_channels
-            )
+            CommandHandler("channels", self.command_channels)
         )
         self.application.add_handler(
-            __import__("telegram.ext", fromlist=["CommandHandler"]).CommandHandler(
-                "signals", self.command_signals
-            )
+            CommandHandler("signals", self.command_signals)
         )
 
-        # Message handler (must be last)
+# Message handler (must be last)
         self.application.add_handler(
-            __import__("telegram.ext", fromlist=["MessageHandler"]).MessageHandler(
-                __import__("telegram.ext", fromlist=["filters"]).filters.TEXT 
-                & ~__import__("telegram.ext", fromlist=["filters"]).filters.COMMAND,
+            MessageHandler(
+                filters.TEXT & ~filters.COMMAND,
                 self.handle_message
             )
         )
@@ -100,6 +105,8 @@ class TelegramBotHandler:
         """
         Handle incoming messages from Telegram.
         
+        Routes message to queue for processing.
+        
         Args:
             update: The incoming update from Telegram
             context: The context of the message
@@ -107,7 +114,12 @@ class TelegramBotHandler:
         if not update.message or not update.message.text:
             return
         
-        session = SessionLocal()
+        if self.session_factory:
+            session = self.session_factory()
+        else:
+            from app.database import SessionLocal
+            session = SessionLocal()
+        
         try:
             message_text = update.message.text
             chat_id = update.message.chat_id
@@ -116,8 +128,8 @@ class TelegramBotHandler:
 
             logger.debug(
                 f"Received message: chat_id={chat_id}, "
-                f"message_id={message_id}, sender_id={sender_id}"
-                f"length={len(message_text)}"
+                f"message_id={message_id}, sender_id={sender_id}, "
+                f"text_length={len(message_text)}"
             )
 
             # Get channel by chat ID
@@ -127,20 +139,22 @@ class TelegramBotHandler:
 
             if not channel:
                 logger.warning(
-                    f"Message from unknown channel: chat_id={chat_id}"
+                    f"Message from unknown channel: chat_id={chat_id}, "
+                    f"message_id={message_id}"
                 )
                 return
 
             if not channel.is_active:
-                logger.warning(
+                logger.debug(
                     f"Message from inactive channel: channel={channel.id}, "
                     f"skipping..."
                 )
                 return
 
+            # Receive message (checks for duplicates)
             message = MessageReceiverService.receive_message(
                 session=session,
-                channel_id=channel.id,
+                channel_id=str(channel.id),
                 telegram_message_id=message_id,
                 telegram_chat_id=chat_id,
                 text=message_text,
@@ -151,17 +165,45 @@ class TelegramBotHandler:
                 },
             )
 
-            if message:
-                logger.info(
-                    f"Message stored: id={message.id}, "
-                    f"channel_id={channel.id}"
-                )
+            if message is None:
+                logger.debug(f"Duplicate message skipped: id={message_id}")
                 session.commit()
+                return
+
+            session.commit()
+
+            logger.info(
+                f"Message received and stored: id={message.id}, "
+                f"channel_id={channel.id}"
+            )
+            
+            # Queue message for processing if queue available
+            if self.message_queue:
+                try:
+                    await self.message_queue.enqueue_message(message)
+                    logger.debug(
+                        f"Message queued: id={message.id}, "
+                        f"queue_size={self.message_queue.get_queue_size()}"
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Failed to queue message: id={message.id}, error={e}",
+                        exc_info=True
+                    )
             else:
-                session.rollback()
+                # Fallback: process directly if no queue
+                if self.message_processor:
+                    try:
+                        success = self.message_processor.process_message(message, session)
+                        if success:
+                            logger.info(f"Message processed directly: id={message.id}")
+                        else:
+                            logger.warning(f"Failed to process message: id={message.id}")
+                    except Exception as e:
+                        logger.error(f"Error processing message: {e}", exc_info=True)
 
         except Exception as e:
-            logger.error(f"Error handling message: {e}")
+            logger.error(f"Error handling message: {e}", exc_info=True)
             session.rollback()
         finally:
             session.close()

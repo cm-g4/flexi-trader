@@ -40,7 +40,7 @@ class Message(Base):
 
 
     # Foreign keys
-    channel_id = Column(String(36), ForeignKey("channels.id"), nullable=False)
+    channel_id = Column(UUID[UUID](as_uuid=True), ForeignKey("channels.id"), nullable=False)
 
 
     # Telegram identifiers

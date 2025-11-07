@@ -1,5 +1,5 @@
 """Telegram integration package."""
 
-from telegram.bot_handler import TelegramBotHandler
+from telegram_bot.bot_handler import TelegramBotHandler
 
 __all__ = ["TelegramBotHandler"]

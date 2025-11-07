@@ -1,67 +1,157 @@
 """Main entry point for the trading signal bot."""
 
 import asyncio
-from app.logging_config import logger
+import signal
+import sys
+from typing import Optional
+
 from app.config import settings
-from app.database import init_db
-from telegram.bot_handler import TelegramBotHandler
+from app.database import SessionLocal, init_db
+from app.logging_config import logger
+from app.services import (
+    MessageProcessorService,
+    MessageQueueService,
+    get_rate_limiter,
+)
+from telegram_bot.bot_handler import TelegramBotHandler
+
+
+class Application:
+    """Main application manager."""
+
+    def __init__(self):
+        """Initialize application."""
+        self.bot_handler: Optional[TelegramBotHandler] = None
+        self.message_queue: Optional[MessageQueueService] = None
+        self.message_processor: Optional[MessageProcessorService] = None
+        self.rate_limiter = None
+
+    async def initialize(self) -> None:
+        """Initialize application components."""
+        logger.info(f"Initializing {settings.app_name}")
+        logger.info(f"Environment: {settings.app_env}")
+        logger.info(f"Debug mode: {settings.app_debug}")
+
+        try:
+            # Initialize database
+            logger.info("Initializing database...")
+            init_db()
+            logger.info("Database initialized successfully")
+
+            # Initialize rate limiter
+            logger.info("Initializing rate limiter...")
+            self.rate_limiter = get_rate_limiter(
+                global_rate=settings.rate_limit_per_minute,
+                channel_rate=settings.rate_limit_channel,
+                user_rate=settings.rate_limit_user,
+            )
+            logger.info("Rate limiter initialized")
+
+            # Initialize message processor
+            logger.info("Initializing message processor...")
+            self.message_processor = MessageProcessorService(
+                rate_limiter=self.rate_limiter,
+                session_factory=SessionLocal,
+            )
+            logger.info("Message processor initialized")
+
+            # Initialize message queue
+            logger.info("Initializing message queue...")
+            self.message_queue = MessageQueueService(
+                max_queue_size=settings.message_queue_max_size,
+                max_concurrent_workers=settings.max_concurrent_workers,
+                worker_timeout=settings.message_queue_timeout,
+            )
+            # Register message processor as callback
+            self.message_queue.register_callback(self.message_processor.process_message)
+            logger.info("Message queue initialized with processor callback")
+
+            # Initialize Telegram bot
+            logger.info("Initializing Telegram bot...")
+            self.bot_handler = TelegramBotHandler(
+                message_queue=self.message_queue,
+                message_processor=self.message_processor,
+            )
+            # Inject session factory for fallback processing
+            self.bot_handler.session_factory = SessionLocal
+            await self.bot_handler.initialize_bot()
+            logger.info("Telegram bot initialized successfully")
+
+            logger.info("Application initialization complete")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize application: {e}", exc_info=True)
+            raise
+
+    async def run(self) -> None:
+        """Run the application (main event loop)."""
+        try:
+            logger.info("Starting application services...")
+
+            # Start message queue workers
+            if self.message_queue:
+                await self.message_queue.start_workers()
+                logger.info("Message queue workers started")
+
+            logger.info("Starting Telegram bot...")
+            # This will block until the bot is stopped (Ctrl+C)
+            if self.bot_handler and self.bot_handler.application:
+                await self.bot_handler.application.run_polling()
+
+        except KeyboardInterrupt:
+            logger.info("Interrupted by user")
+        except Exception as e:
+            logger.error(f"Application error: {e}", exc_info=True)
+            raise
+        finally:
+            await self.shutdown()
+
+    async def shutdown(self) -> None:
+        """Shutdown application gracefully."""
+        try:
+            logger.info("Shutting down application...")
+
+            # Stop message queue
+            if self.message_queue:
+                await self.message_queue.stop_workers()
+                logger.info("Message queue workers stopped")
+
+            # Stop bot
+            if self.bot_handler:
+                await self.bot_handler.stop_bot()
+                logger.info("Telegram bot stopped")
+
+            logger.info("Application shutdown complete")
+
+        except Exception as e:
+            logger.error(f"Error during shutdown: {e}", exc_info=True)
 
 
 async def main():
-    """Initialize and run the application."""
-    logger.info(f"Starting {settings.app_name}")
-    logger.info(f"Environment: {settings.app_env}")
-    logger.info(f"Debug mode: {settings.app_debug}")
-    
+    """Main entry point - initialize and run the application."""
+    app = Application()
+
     try:
-        # Initialize database
-        logger.info("Initializing database...")
-        init_db()
+        # Initialize all components
+        await app.initialize()
+        
+        # Run the application (this blocks on bot polling)
+        await app.run()
 
-        logger.info("Database initialized successfully")
-        
-        # Initialize Telegram bot
-        bot_handler = TelegramBotHandler()
-        await bot_handler.initialize_bot()
-        logger.info("Telegram bot initialized")
-
-        from app.services import get_rate_limiter, MessageQueueService
-        rate_limiter = get_rate_limiter(
-            global_rate=settings.rate_limit_per_minute,
-            channel_rate=30,
-        )
-        message_queue = MessageQueueService(max_queue_size=settings.message_queue_max_size)
-
-        # Register message processor callback
-        from app.services import MessageProcessorService
-        processor = MessageProcessorService(session_factory=SessionLocal)
-        message_queue.register_callback(processor.process_message)
-
-        
-        # Start queue workers
-        await message_queue.start_workers()
-        logger.info("Message queue workers started")
-        
-        # Create polling task
-        polling_task = asyncio.create_task(bot_handler.start_polling())
-        
-        logger.info("Application running...")
-        
-        # Wait for polling to complete (handles Ctrl+C)
-        await polling_task
-
-        
     except KeyboardInterrupt:
-        logger.info("Shutdown signal received")
+        logger.info("Application terminated by user")
     except Exception as e:
-        logger.error(f"Application error: {e}", exc_info=True)
-        raise
-    finally:
-        # Cleanup
-        if 'message_queue' in locals():
-            await message_queue.stop_workers()
-        logger.info("Application stopped")
+        logger.error(f"Fatal error: {e}", exc_info=True)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        # Run the async main function
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Shutdown complete")
+        sys.exit(0)
+    except Exception as e:
+        logger.error(f"Unhandled exception: {e}", exc_info=True)
+        sys.exit(1)
