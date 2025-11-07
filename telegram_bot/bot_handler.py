@@ -63,7 +63,7 @@ class TelegramBotHandler:
         # Add handlers
         self._setup_handlers()
 
-        logger.info("Telegram bot initialized successfully")
+        logger.info(f"Telegram bot initialized successfully with token: {settings.telegram_bot_token}")
 
     def _setup_handlers(self) -> None:
         """Set up bot handlers for commands and messages."""

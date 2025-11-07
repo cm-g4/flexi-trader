@@ -96,6 +96,10 @@ class Application:
             logger.info("Starting Telegram bot...")
             # Use start() instead of run_polling() to work with existing event loop
             if self.bot_handler and self.bot_handler.application:
+                # Initialize the application first (CRITICAL STEP!)
+                await self.bot_handler.application.initialize()
+                logger.info("Telegram application initialized")
+                
                 await self.bot_handler.application.start()
                 logger.info("Telegram bot started")
                 
