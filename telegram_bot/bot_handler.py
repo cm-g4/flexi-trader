@@ -143,9 +143,10 @@ class TelegramBotHandler:
         
         try:
             message_text = update.message.text
-            chat_id = update.message.chat_id
+            chat_id = update.message.chat.id
             message_id = update.message.message_id
             sender_id = update.message.from_user.id if update.message.from_user else None
+
 
             logger.debug(
                 f"Received message: chat_id={chat_id}, "
