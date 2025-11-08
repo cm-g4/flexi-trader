@@ -15,6 +15,9 @@ __all__ = [
     "RateLimiterService",
     "get_rate_limiter",
     "MessageProcessorService",
+    "ParserEngine",
+    "SignalValidator",
+    "SignalProcessingPipeline",
 ]
 
 

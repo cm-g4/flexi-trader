@@ -1,165 +1,313 @@
-"""Duplicate detection service for messages and signals."""
+"""Duplicate detection service for identifying duplicate trading signals."""
 
-
+from typing import Optional, Tuple
+from difflib import SequenceMatcher
 from datetime import datetime, timedelta, timezone
-from token import OP
-from typing import Optional
-
+from uuid import UUID
 from sqlalchemy.orm import Session
 
-from app.exceptions import DuplicateSignalError
 from app.logging_config import logger
-from app.models import Message
+from app.models import Message, Signal
+from app.exceptions import DuplicateSignalError
 
 
 class DuplicateDetectionService:
-    """Service for detecting duplicate messages."""
+    """
+    Detects duplicate signals to prevent storing the same signal multiple times.
+    
+    Strategies:
+    1. Exact message ID match (fastest)
+    2. Text similarity with fuzzy matching (handles minor variations)
+    3. Signal data matching (entry price, SL, symbol within time window)
+    """
 
-    # Lookback window for duplication detection (hours)
-    LOOKBACK_HOURS = 24
+    def __init__(
+        self,
+        similarity_threshold: float = 0.90,
+        lookback_hours: int = 24,
+    ):
+        """
+        Initialize duplicate detection service.
 
-    @staticmethod
-    def is_duplicate_message(
+        Args:
+            similarity_threshold: Similarity threshold for fuzzy matching (0-1)
+            lookback_hours: How many hours back to look for duplicates
+        """
+        self.similarity_threshold = similarity_threshold
+        self.lookback_hours = lookback_hours
+
+    def is_duplicate(
+        self,
         session: Session,
-        channel_id: str,
-        telegram_message_id: int,
+        message: Message,
+        channel_id: UUID,
         lookback_hours: Optional[int] = None,
     ) -> bool:
         """
-        Check if a message has already been received.
-        
-        Uses telegram_message_id for exact duplicate detection, as each
-        message in Telegram has a unique ID within a chat.
-        
+        Check if a message is a duplicate of a recently processed message.
+
         Args:
             session: Database session
-            channel_id: Channel identifier
-            telegram_message_id: Telegram's message ID
-            lookback_hours: Hours to look back (default: LOOKBACK_HOURS)
-        
-        Returns:
-            True if duplicate found, False otherwise
-        """
-        lookback_hours = lookback_hours or DuplicateDetectionService.LOOKBACK_HOURS
-        lookback_time = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+            message: Message to check
+            channel_id: Channel ID
+            lookback_hours: How many hours back to look (uses default if None)
 
-        existing_message = (
+        Returns:
+            True if duplicate detected, False otherwise
+        """
+        lookback = lookback_hours or self.lookback_hours
+
+        # Strategy 1: Exact match by telegram_message_id
+        if self._check_exact_message_id_match(session, message, channel_id):
+            return True
+
+        # Strategy 2: Fuzzy text similarity
+        if self._check_fuzzy_text_match(
+            session, message, channel_id, lookback
+        ):
+            return True
+
+        # Strategy 3: Check for signal data duplicates
+        if self._check_signal_data_match(
+            session, message, channel_id, lookback
+        ):
+            return True
+
+        return False
+
+    def detect_or_raise(
+        self,
+        session: Session,
+        message: Message,
+        channel_id: UUID,
+    ) -> None:
+        """
+        Check for duplicates and raise error if found.
+
+        Args:
+            session: Database session
+            message: Message to check
+            channel_id: Channel ID
+
+        Raises:
+            DuplicateSignalError: If duplicate detected
+        """
+        if self.is_duplicate(session, message, channel_id):
+            error_msg = (
+                f"Duplicate signal detected for message "
+                f"{message.telegram_message_id} in channel {channel_id}"
+            )
+            logger.warning(error_msg)
+            raise DuplicateSignalError(error_msg)
+
+    def _check_exact_message_id_match(
+        self,
+        session: Session,
+        message: Message,
+        channel_id: UUID,
+    ) -> bool:
+        """
+        Check if exact message ID already exists.
+
+        Args:
+            session: Database session
+            message: Message to check
+            channel_id: Channel ID
+
+        Returns:
+            True if exact match found
+        """
+        existing = (
             session.query(Message)
             .filter(
                 Message.channel_id == channel_id,
-                Message.telegram_message_id == telegram_message_id,
-                Message.created_at >= lookback_time,
+                Message.telegram_message_id == message.telegram_message_id,
+                Message.id != message.id,  # Exclude self
             )
             .first()
         )
 
-        is_duplicate = existing_message is not None
-        if is_duplicate:
-            logger.warning(
-                f"Duplicate message detected: channel_id={channel_id}, "
-                f"telegram_message_id={telegram_message_id}, "
-                f"created_at={existing_message.created_at}"
+        if existing:
+            logger.debug(
+                f"Exact message ID match found: "
+                f"{message.telegram_message_id}"
             )
+            return True
 
-        return is_duplicate
+        return False
 
-
-    @staticmethod
-    def is_similar_message(
+    def _check_fuzzy_text_match(
+        self,
         session: Session,
-        channel_id: str,
-        message_text: str,
-        lookback_hours: Optional[int] = None,
-        similarity_threshold: float = 0.95,
-    ) -> Optional[Message]:
+        message: Message,
+        channel_id: UUID,
+        lookback_hours: int,
+    ) -> bool:
         """
         Check for similar messages using text similarity.
-        
-        Useful for detecting near-duplicates that might have minor changes
-        but represent the same signal.
-        
+
         Args:
             session: Database session
-            channel_id: Channel identifier
-            message_text: New message text
-            lookback_hours: Hours to look back
-            similarity_threshold: Similarity threshold (0-1)
-        
-        Returns:
-            Similar message if found, None otherwise
-        """
-        lookback_hours = lookback_hours or DuplicateDetectionService.LOOKBACK_HOURS
-        lookback_time = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+            message: Message to check
+            channel_id: Channel ID
+            lookback_hours: How many hours back to look
 
+        Returns:
+            True if similar message found
+        """
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+
+        # Get recent messages from same channel
         recent_messages = (
             session.query(Message)
             .filter(
                 Message.channel_id == channel_id,
-                Message.created_at >= lookback_time,
+                Message.created_at >= cutoff_time,
+                Message.id != message.id,  # Exclude self
             )
-            .order_by(Message.created_at.desc())
-            .limit(100)  # Check last 100 messages for performance
             .all()
         )
 
         for existing_msg in recent_messages:
-            similarity = DuplicateDetectionService._calculate_similarity(
-                message_text, existing_msg.text
-            )
-            if similarity >= similarity_threshold:
+            similarity = self._calculate_similarity(message.text, existing_msg.text)
+
+            if similarity >= self.similarity_threshold:
                 logger.debug(
-                    f"Similar message detected: similarity={similarity:.2%}, "
-                    f"message_id={existing_msg.telegram_message_id}"
+                    f"Fuzzy match found with similarity {similarity:.2f}: "
+                    f"{message.telegram_message_id}"
                 )
-                return existing_msg
+                return True
 
-        return None
+        return False
 
-
-    @staticmethod
-    def _calculate_similarity(text1: str, text2: str) -> float:
+    def _check_signal_data_match(
+        self,
+        session: Session,
+        message: Message,
+        channel_id: UUID,
+        lookback_hours: int,
+    ) -> bool:
         """
-        Calculate text similarity using simple ratio.
-        
+        Check for duplicate signal data (same symbol, entry, SL).
+
+        Args:
+            session: Database session
+            message: Message to check
+            channel_id: Channel ID
+            lookback_hours: How many hours back to look
+
+        Returns:
+            True if signal data duplicate found
+        """
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+
+        # Parse signal from message text (simple heuristic)
+        parsed_signal = self._parse_signal_from_text(message.text)
+
+        if not parsed_signal:
+            return False
+
+        symbol = parsed_signal.get("symbol")
+        entry = parsed_signal.get("entry")
+
+        if not symbol or not entry:
+            return False
+
+        # Look for similar signals
+        recent_signals = (
+            session.query(Signal)
+            .filter(
+                Signal.channel_id == channel_id,
+                Signal.symbol == symbol,
+                Signal.created_at >= cutoff_time,
+                Signal.status.in_(["PENDING", "OPEN"]),  # Active signals
+            )
+            .all()
+        )
+
+        for signal in recent_signals:
+            # Check if entry prices match (within 0.1%)
+            if self._prices_match(entry, signal.entry_price):
+                logger.debug(
+                    f"Signal data duplicate found: {symbol} @ {entry}"
+                )
+                return True
+
+        return False
+
+    def _calculate_similarity(self, text1: str, text2: str) -> float:
+        """
+        Calculate text similarity using SequenceMatcher.
+
         Args:
             text1: First text
             text2: Second text
-        
+
         Returns:
-            Similarity ratio (0-1)
+            Similarity score (0-1)
         """
-
-        from difflib import SequenceMatcher
-
-        text1 = text1.lower().strip()
-        text2 = text2.lower().strip()
-
-        # Quick exact match
-        if text1 == text2:
-            return 1.0
-
-        # Use sequence matcher
-        matcher = SequenceMatcher(None, text1, text2)
+        matcher = SequenceMatcher(None, text1.lower(), text2.lower())
         return matcher.ratio()
 
-    @staticmethod
-    def cleanup_old_duplicates(
-        session: Session, days_to_keep: int = 30
+    def _parse_signal_from_text(self, text: str) -> Optional[dict]:
+        """
+        Parse basic signal data from message text.
+
+        Args:
+            text: Message text
+
+        Returns:
+            Dictionary with symbol and entry, or None
+        """
+        import re
+
+        # Simple regex patterns to extract symbol and entry
+        symbol_pattern = r"\b([A-Z]{3}USD|XAU/USD|XAUUSD)\b"
+        entry_pattern = r"(?:entry|@|\()\s*([0-9]+\.[0-9]+)"
+
+        symbol_match = re.search(symbol_pattern, text, re.IGNORECASE)
+        entry_match = re.search(entry_pattern, text, re.IGNORECASE)
+
+        if not symbol_match or not entry_match:
+            return None
+
+        return {
+            "symbol": symbol_match.group(1).upper().replace("/", ""),
+            "entry": float(entry_match.group(1)),
+        }
+
+    def _prices_match(self, price1: float, price2: float, tolerance: float = 0.001) -> bool:
+        """
+        Check if two prices match within tolerance (0.1%).
+
+        Args:
+            price1: First price
+            price2: Second price
+            tolerance: Tolerance as decimal (0.001 = 0.1%)
+
+        Returns:
+            True if prices match within tolerance
+        """
+        if price1 == 0 or price2 == 0:
+            return False
+
+        difference = abs(price1 - price2) / price1
+        return difference <= tolerance
+
+    def cleanup_old_messages(
+        self,
+        session: Session,
+        days_to_keep: int = 30,
     ) -> int:
         """
-        Clean up old messages for storage optimization.
-        
-        Keeps messages that are signals or recent, deletes old non-signal messages.
-        
+        Clean up old non-signal messages to maintain database size.
+
         Args:
             session: Database session
-            days_to_keep: Days of history to keep
-        
+            days_to_keep: Days of message history to keep
+
         Returns:
             Number of messages deleted
-        
-        Note:
-            Only deletes messages that are NOT signals to preserve signal history.
         """
         cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_to_keep)
 
@@ -173,107 +321,54 @@ class DuplicateDetectionService:
         )
 
         session.commit()
-        logger.info(f"Deleted {deleted_count} old non-signal messages")
+        logger.info(f"Cleaned up {deleted_count} old messages")
         return deleted_count
 
-    @staticmethod
-    def is_duplicate(
+    def get_duplicate_stats(
+        self,
         session: Session,
-        message: Message,
-        channel_id: str,
-        lookback_hours: Optional[int] = None,
-        similarity_threshold: float = 0.95,
-    ) -> bool:
+        channel_id: UUID,
+        lookback_hours: int = 24,
+    ) -> dict:
         """
-        Check if a message is a duplicate based on text similarity.
-        
-        Checks both exact matches (by telegram_message_id) and similar messages
-        (by text content). Excludes the message being checked if it has an ID.
-        
-        Args:
-            session: Database session
-            message: Message object to check
-            channel_id: Channel identifier
-            lookback_hours: Hours to look back (default: LOOKBACK_HOURS)
-            similarity_threshold: Similarity threshold for fuzzy matching (0-1)
-        
-        Returns:
-            True if duplicate found, False otherwise
-        """
-        lookback_hours = lookback_hours or DuplicateDetectionService.LOOKBACK_HOURS
-        lookback_time = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
-        
-        # Check for exact duplicate by telegram_message_id, excluding this message
-        query = session.query(Message).filter(
-            Message.channel_id == channel_id,
-            Message.telegram_message_id == message.telegram_message_id,
-            Message.created_at >= lookback_time,
-        )
-        # Exclude the message being checked if it has an ID
-        if message.id:
-            query = query.filter(Message.id != message.id)
-        
-        existing_message = query.first()
-        if existing_message:
-            return True
-        
-        # Then check for similar text content, excluding this message
-        if message.text:
-            recent_messages = (
-                session.query(Message)
-                .filter(
-                    Message.channel_id == channel_id,
-                    Message.created_at >= lookback_time,
-                )
-            )
-            # Exclude the message being checked if it has an ID
-            if message.id:
-                recent_messages = recent_messages.filter(Message.id != message.id)
-            
-            recent_messages = (
-                recent_messages
-                .order_by(Message.created_at.desc())
-                .limit(100)
-                .all()
-            )
-            
-            for existing_msg in recent_messages:
-                if existing_msg.text:
-                    similarity = DuplicateDetectionService._calculate_similarity(
-                        message.text, existing_msg.text
-                    )
-                    if similarity >= similarity_threshold:
-                        return True
-        
-        return False
+        Get statistics on duplicate detection.
 
-    @staticmethod
-    def detect_or_raise(
-        session: Session,
-        message: Message,
-        channel_id: str,
-        lookback_hours: Optional[int] = None,
-        similarity_threshold: float = 0.95,
-    ) -> None:
-        """
-        Detect duplicate and raise exception if found.
-        
         Args:
             session: Database session
-            message: Message object to check
-            channel_id: Channel identifier
-            lookback_hours: Hours to look back (default: LOOKBACK_HOURS)
-            similarity_threshold: Similarity threshold for fuzzy matching (0-1)
-        
-        Raises:
-            DuplicateSignalError: If duplicate is detected
+            channel_id: Channel ID
+            lookback_hours: Lookback period
+
+        Returns:
+            Statistics dictionary
         """
-        if DuplicateDetectionService.is_duplicate(
-            session, message, channel_id, lookback_hours, similarity_threshold
-        ):
-            raise DuplicateSignalError(
-                f"Duplicate message detected: channel_id={channel_id}, "
-                f"telegram_message_id={message.telegram_message_id}"
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+
+        total_messages = (
+            session.query(Message)
+            .filter(
+                Message.channel_id == channel_id,
+                Message.created_at >= cutoff_time,
             )
+            .count()
+        )
+
+        signal_messages = (
+            session.query(Message)
+            .filter(
+                Message.channel_id == channel_id,
+                Message.created_at >= cutoff_time,
+                Message.is_signal == True,
+            )
+            .count()
+        )
+
+        return {
+            "total_messages": total_messages,
+            "signal_messages": signal_messages,
+            "non_signal_messages": total_messages - signal_messages,
+            "lookback_hours": lookback_hours,
+            "period": f"Last {lookback_hours} hours",
+        }
+
 
 __all__ = ["DuplicateDetectionService"]
